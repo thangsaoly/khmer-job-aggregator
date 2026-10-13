@@ -1,0 +1,29 @@
+{
+  "name": "khmer-job-aggregator",
+  "version": "1.0.0",
+  "description": "Cambodian tech job & internship aggregator — TikTok-first, AI-powered.",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "seed": "node scripts/seed-mock-jobs.js"
+  },
+  "keywords": [
+    "jobs",
+    "cambodia",
+    "tech",
+    "khmer"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^2.29.1",
+    "apify-client": "^2.25.0",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.7",
+    "express": "^5.3.0",
+    "node-cron": "^4.6.0"
+  }
+}

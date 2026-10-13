@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Environment secrets — NEVER commit .env
+.env
+
+# SQLite database files (WAL mode generates sidecar files)
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
