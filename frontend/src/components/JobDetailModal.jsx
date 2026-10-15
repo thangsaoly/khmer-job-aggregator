@@ -109,6 +109,8 @@ export default function JobDetailModal({ jobId, onClose }) {
                     src={job.thumbnail_url}
                     alt={`Poster for ${job.title}`}
                     className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                    onError={(e) => { e.currentTarget.parentElement.style.display = 'none'; }}
                   />
                 </div>
               )}

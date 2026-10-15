@@ -1,140 +1,114 @@
 /**
- * db.js — Database initialization and query helpers
+ * db.js — Database client using @libsql/client (Turso / LibSQL)
  *
- * Uses better-sqlite3 (synchronous SQLite) in WAL mode so that the
- * background cron writer never blocks the Express API reader.
+ * Supports two modes via environment variables:
+ *   - Local dev:  TURSO_DB_URL=file:./jobs.db  (no token needed)
+ *   - Production: TURSO_DB_URL=libsql://...     TURSO_DB_AUTH_TOKEN=...
  *
- * Two-table deduplication pattern:
- *   raw_ingested_posts  — every post ever seen, with status
- *   job_listings        — clean structured jobs (approved posts only)
+ * All exported functions are now async because the LibSQL client is async.
  */
 
-import Database from 'better-sqlite3';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { createClient } from '@libsql/client';
 
-// Resolve the project root so jobs.db sits next to src/, not inside it
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DB_PATH = join(__dirname, '..', 'jobs.db');
+// ─── Client Initialization ────────────────────────────────────────────────────
 
-// ─── Initialize ──────────────────────────────────────────────────────────────
+const DB_URL = process.env.TURSO_DB_URL || 'file:./jobs.db';
 
-const db = new Database(DB_PATH);
+// On Vercel / GitHub Actions the filesystem is thrown away after each run, so a
+// local SQLite file would silently lose every scraped job. Fail loudly instead.
+if ((process.env.VERCEL || process.env.CI) && DB_URL.startsWith('file:')) {
+  throw new Error('TURSO_DB_URL must point to a remote Turso database (libsql://...) in production/CI.');
+}
 
-// WAL mode: readers don't block writers, writers don't block readers
-db.pragma('journal_mode = WAL');
-// SQLite disables FK enforcement per-connection by default — always turn it on
-db.pragma('foreign_keys = ON');
+const db = createClient({
+  url:       DB_URL,
+  authToken: process.env.TURSO_DB_AUTH_TOKEN || undefined,
+});
 
-// ─── Schema ──────────────────────────────────────────────────────────────────
+// ─── Schema Setup ─────────────────────────────────────────────────────────────
 
-db.exec(`
-  -- Every post ever scraped. Gate 1 dedup checks this table.
-  CREATE TABLE IF NOT EXISTS raw_ingested_posts (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    platform         TEXT NOT NULL CHECK(platform IN ('TIKTOK','TELEGRAM','FACEBOOK','WEB')),
-    external_post_id TEXT NOT NULL,
-    post_url         TEXT NOT NULL,
-    author_handle    TEXT,
-    raw_caption      TEXT,
-    hashtags         TEXT,              -- JSON array, e.g. '["hiring","internship"]'
-    thumbnail_url    TEXT,
-    posted_at        TEXT,              -- ISO 8601 string from source
-    status           TEXT NOT NULL DEFAULT 'PENDING'
-                       CHECK(status IN ('PENDING','APPROVED','REJECTED','ERROR')),
-    rejection_reason TEXT,
-    scraped_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(platform, external_post_id)  -- the dedup key
-  );
+/**
+ * Must be called once on startup to ensure tables and indexes exist.
+ * Returns a promise so the server can await it before accepting requests.
+ */
+export async function initializeSchema() {
+  await db.executeMultiple(`
+    CREATE TABLE IF NOT EXISTS raw_ingested_posts (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      platform         TEXT NOT NULL,
+      external_post_id TEXT NOT NULL,
+      post_url         TEXT NOT NULL,
+      author_handle    TEXT,
+      raw_caption      TEXT,
+      hashtags         TEXT,
+      thumbnail_url    TEXT,
+      posted_at        TEXT,
+      status           TEXT NOT NULL DEFAULT 'PENDING',
+      rejection_reason TEXT,
+      scraped_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(platform, external_post_id)
+    );
 
-  -- Clean, AI-extracted job data. Only exists for APPROVED raw posts.
-  CREATE TABLE IF NOT EXISTS job_listings (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    raw_post_id      INTEGER NOT NULL,
-    title            TEXT NOT NULL,
-    company_name     TEXT,
-    category         TEXT NOT NULL DEFAULT 'OTHER'
-                       CHECK(category IN (
-                         'SOFTWARE_DEV','DATA_AI','UX_UI',
-                         'IT_SUPPORT_NETWORK','QA_TESTING','DIGITAL_MARKETING','OTHER'
-                       )),
-    is_internship    INTEGER NOT NULL DEFAULT 0 CHECK(is_internship IN (0,1)),
-    location         TEXT NOT NULL DEFAULT 'Phnom Penh',
-    salary_range     TEXT,
-    contact_info     TEXT,
-    summary          TEXT,
-    confidence_score REAL,
-    published_at     TEXT,             -- mirrors raw_ingested_posts.posted_at
-    created_at       TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (raw_post_id) REFERENCES raw_ingested_posts(id) ON DELETE CASCADE
-  );
+    CREATE TABLE IF NOT EXISTS job_listings (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      raw_post_id      INTEGER NOT NULL,
+      title            TEXT NOT NULL,
+      company_name     TEXT,
+      category         TEXT NOT NULL DEFAULT 'OTHER',
+      is_internship    INTEGER NOT NULL DEFAULT 0,
+      location         TEXT NOT NULL DEFAULT 'Phnom Penh',
+      salary_range     TEXT,
+      contact_info     TEXT,
+      summary          TEXT,
+      confidence_score REAL,
+      published_at     TEXT,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (raw_post_id) REFERENCES raw_ingested_posts(id) ON DELETE CASCADE
+    );
 
-  -- Composite index optimized for the primary API query pattern
-  CREATE INDEX IF NOT EXISTS idx_job_listings_filters
-    ON job_listings(category, is_internship, location, published_at DESC);
-`);
-
-// ─── Prepared Statements ─────────────────────────────────────────────────────
-
-const stmts = {
-  findRawByExternalId: db.prepare(`
-    SELECT id, status FROM raw_ingested_posts
-    WHERE platform = @platform AND external_post_id = @externalPostId
-    LIMIT 1
-  `),
-
-  insertRawPost: db.prepare(`
-    INSERT INTO raw_ingested_posts
-      (platform, external_post_id, post_url, author_handle, raw_caption,
-       hashtags, thumbnail_url, posted_at)
-    VALUES
-      (@platform, @externalPostId, @postUrl, @authorHandle, @rawCaption,
-       @hashtags, @thumbnailUrl, @postedAt)
-  `),
-
-  updateRawStatus: db.prepare(`
-    UPDATE raw_ingested_posts
-    SET status = @status, rejection_reason = @rejectionReason
-    WHERE id = @id
-  `),
-
-  insertJobListing: db.prepare(`
-    INSERT INTO job_listings
-      (raw_post_id, title, company_name, category, is_internship,
-       location, salary_range, contact_info, summary, confidence_score, published_at)
-    VALUES
-      (@rawPostId, @title, @companyName, @category, @isInternship,
-       @location, @salaryRange, @contactInfo, @summary, @confidenceScore, @publishedAt)
-  `),
-};
+    CREATE INDEX IF NOT EXISTS idx_job_listings_filters
+      ON job_listings(category, is_internship, location, published_at DESC);
+  `);
+}
 
 // ─── Helper Functions ─────────────────────────────────────────────────────────
 
 /**
  * Gate 1 — Check if a post has already been ingested.
- * @returns {{ id: number, status: string } | undefined}
+ * @returns {{ id: number, status: string } | null}
  */
-export function findRawPostByExternalId(platform, externalPostId) {
-  return stmts.findRawByExternalId.get({ platform, externalPostId });
+export async function findRawPostByExternalId(platform, externalPostId) {
+  const result = await db.execute({
+    sql:  'SELECT id, status FROM raw_ingested_posts WHERE platform = ? AND external_post_id = ? LIMIT 1',
+    args: [platform, externalPostId],
+  });
+  return result.rows[0] ?? null;
 }
 
 /**
  * Insert a newly scraped post into raw_ingested_posts.
- * @param {object} post
  * @returns {{ id: number }} The new row's lastInsertRowid
  */
-export function insertRawPost(post) {
-  const result = stmts.insertRawPost.run({
-    platform:       post.platform,
-    externalPostId: post.externalPostId,
-    postUrl:        post.postUrl,
-    authorHandle:   post.authorHandle ?? null,
-    rawCaption:     post.rawCaption ?? null,
-    hashtags:       post.hashtags ? JSON.stringify(post.hashtags) : null,
-    thumbnailUrl:   post.thumbnailUrl ?? null,
-    postedAt:       post.postedAt ?? null,
+export async function insertRawPost(post) {
+  const result = await db.execute({
+    sql: `
+      INSERT INTO raw_ingested_posts
+        (platform, external_post_id, post_url, author_handle, raw_caption,
+         hashtags, thumbnail_url, posted_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    args: [
+      post.platform,
+      post.externalPostId,
+      post.postUrl,
+      post.authorHandle ?? null,
+      post.rawCaption   ?? null,
+      post.hashtags ? JSON.stringify(post.hashtags) : null,
+      post.thumbnailUrl ?? null,
+      post.postedAt     ?? null,
+    ],
   });
-  return { id: result.lastInsertRowid };
+  return { id: Number(result.lastInsertRowid) };
 }
 
 /**
@@ -143,8 +117,11 @@ export function insertRawPost(post) {
  * @param {'APPROVED'|'REJECTED'|'ERROR'} status
  * @param {string|null} rejectionReason
  */
-export function updateRawPostStatus(id, status, rejectionReason = null) {
-  stmts.updateRawStatus.run({ id, status, rejectionReason });
+export async function updateRawPostStatus(id, status, rejectionReason = null) {
+  await db.execute({
+    sql:  'UPDATE raw_ingested_posts SET status = ?, rejection_reason = ? WHERE id = ?',
+    args: [status, rejectionReason, id],
+  });
 }
 
 /**
@@ -152,19 +129,27 @@ export function updateRawPostStatus(id, status, rejectionReason = null) {
  * @param {number} rawPostId
  * @param {object} jobData — fields from AI extraction
  */
-export function insertJobListing(rawPostId, jobData) {
-  stmts.insertJobListing.run({
-    rawPostId,
-    title:           jobData.title,
-    companyName:     jobData.company_name ?? null,
-    category:        jobData.category ?? 'OTHER',
-    isInternship:    jobData.is_internship ? 1 : 0,
-    location:        jobData.location ?? 'Phnom Penh',
-    salaryRange:     jobData.salary_range ?? null,
-    contactInfo:     jobData.contact_info ?? null,
-    summary:         jobData.summary ?? null,
-    confidenceScore: jobData.confidence_score ?? null,
-    publishedAt:     jobData.publishedAt ?? null,
+export async function insertJobListing(rawPostId, jobData) {
+  await db.execute({
+    sql: `
+      INSERT INTO job_listings
+        (raw_post_id, title, company_name, category, is_internship,
+         location, salary_range, contact_info, summary, confidence_score, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    args: [
+      rawPostId,
+      jobData.title,
+      jobData.company_name    ?? null,
+      jobData.category        ?? 'OTHER',
+      jobData.is_internship   ? 1 : 0,
+      jobData.location        ?? 'Phnom Penh',
+      jobData.salary_range    ?? null,
+      jobData.contact_info    ?? null,
+      jobData.summary         ?? null,
+      jobData.confidence_score ?? null,
+      jobData.publishedAt     ?? null,
+    ],
   });
 }
 
@@ -178,62 +163,78 @@ export function insertJobListing(rawPostId, jobData) {
  * @param {string}  [filters.q]           — keyword search (title/company/summary)
  * @param {number}  [filters.limit=20]
  * @param {number}  [filters.offset=0]
- * @returns {object[]}
+ * @returns {Promise<object[]>}
  */
-export function queryJobListings({ category, isInternship, location, q, limit = 20, offset = 0 } = {}) {
+export async function queryJobListings({
+  category,
+  isInternship,
+  location,
+  q,
+  limit = 20,
+  offset = 0,
+} = {}) {
   const conditions = [];
-  const params = {};
+  const args = [];
 
   if (category) {
-    conditions.push('j.category = @category');
-    params.category = category.toUpperCase();
+    conditions.push('j.category = ?');
+    args.push(category.toUpperCase());
   }
   if (isInternship !== undefined) {
-    conditions.push('j.is_internship = @isInternship');
-    params.isInternship = isInternship ? 1 : 0;
+    conditions.push('j.is_internship = ?');
+    args.push(isInternship ? 1 : 0);
   }
   if (location) {
-    conditions.push('j.location LIKE @location');
-    params.location = `%${location}%`;
+    conditions.push('j.location LIKE ?');
+    args.push(`%${location}%`);
   }
   if (q) {
-    conditions.push('(j.title LIKE @q OR j.company_name LIKE @q OR j.summary LIKE @q)');
-    params.q = `%${q}%`;
+    conditions.push('(j.title LIKE ? OR j.company_name LIKE ? OR j.summary LIKE ?)');
+    args.push(`%${q}%`, `%${q}%`, `%${q}%`);
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  // Join with raw_ingested_posts to include post_url and author_handle for attribution
-  const rows = db.prepare(`
-    SELECT
-      j.id, j.title, j.company_name, j.category, j.is_internship,
-      j.location, j.salary_range, j.contact_info, j.summary,
-      j.confidence_score, j.published_at, j.created_at,
-      r.post_url, r.author_handle, r.thumbnail_url, r.platform
-    FROM job_listings j
-    JOIN raw_ingested_posts r ON j.raw_post_id = r.id
-    ${whereClause}
-    ORDER BY j.published_at DESC, j.created_at DESC
-    LIMIT @limit OFFSET @offset
-  `).all({ ...params, limit, offset });
+  // Limit and offset go at the end of args
+  args.push(limit, offset);
 
-  return rows;
+  const result = await db.execute({
+    sql: `
+      SELECT
+        j.id, j.title, j.company_name, j.category, j.is_internship,
+        j.location, j.salary_range, j.contact_info, j.summary,
+        j.confidence_score, j.published_at, j.created_at,
+        r.post_url, r.author_handle, r.thumbnail_url, r.platform
+      FROM job_listings j
+      JOIN raw_ingested_posts r ON j.raw_post_id = r.id
+      ${whereClause}
+      ORDER BY j.published_at DESC, j.created_at DESC
+      LIMIT ? OFFSET ?
+    `,
+    args,
+  });
+
+  return result.rows;
 }
 
 /**
  * Get a single job by ID (with raw post data for full attribution).
  * @param {number} id
- * @returns {object|undefined}
+ * @returns {Promise<object|null>}
  */
-export function getJobById(id) {
-  return db.prepare(`
-    SELECT
-      j.*, r.post_url, r.author_handle, r.thumbnail_url,
-      r.platform, r.raw_caption, r.posted_at as original_posted_at
-    FROM job_listings j
-    JOIN raw_ingested_posts r ON j.raw_post_id = r.id
-    WHERE j.id = @id
-  `).get({ id });
+export async function getJobById(id) {
+  const result = await db.execute({
+    sql: `
+      SELECT
+        j.*, r.post_url, r.author_handle, r.thumbnail_url,
+        r.platform, r.raw_caption, r.posted_at as original_posted_at
+      FROM job_listings j
+      JOIN raw_ingested_posts r ON j.raw_post_id = r.id
+      WHERE j.id = ?
+    `,
+    args: [id],
+  });
+  return result.rows[0] ?? null;
 }
 
 export default db;

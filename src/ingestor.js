@@ -11,7 +11,7 @@
  */
 
 import { GoogleGenAI, Type } from '@google/genai';
-import db, {
+import {
   findRawPostByExternalId,
   insertRawPost,
   updateRawPostStatus,
@@ -115,10 +115,13 @@ Extract all job information you can find. Respond only with the required JSON ob
   if (thumbnailUrl) {
     try {
       const imageResponse = await fetch(thumbnailUrl);
-      if (imageResponse.ok) {
+      // Gemini rejects the whole request on an unsupported mimeType, so only
+      // attach formats it accepts (TikTok CDN sometimes serves octet-stream).
+      const contentType = (imageResponse.headers.get('content-type') ?? '').split(';')[0].trim();
+      const supported   = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+      if (imageResponse.ok && supported.includes(contentType)) {
         const arrayBuffer = await imageResponse.arrayBuffer();
         const base64Data  = Buffer.from(arrayBuffer).toString('base64');
-        const contentType = imageResponse.headers.get('content-type') ?? 'image/jpeg';
 
         // Prepend image so the model sees it before the text prompt
         contentParts.unshift({
@@ -203,7 +206,7 @@ export async function processScrapedPosts(posts) {
     summary.processed++;
 
     // ── Gate 1: DB Deduplication ─────────────────────────────────────────────
-    const existing = findRawPostByExternalId(post.platform ?? 'TIKTOK', post.id);
+    const existing = await findRawPostByExternalId(post.platform ?? 'TIKTOK', post.id);
     let rawPostId;
 
     if (existing) {
@@ -218,7 +221,7 @@ export async function processScrapedPosts(posts) {
     } else {
       // Insert into raw_ingested_posts immediately so re-runs don't double-process
       try {
-        const result = insertRawPost({
+        const result = await insertRawPost({
           platform:       post.platform ?? 'TIKTOK',
           externalPostId: post.id,
           postUrl:        post.url ?? post.webVideoUrl ?? '',
@@ -250,7 +253,7 @@ export async function processScrapedPosts(posts) {
     const filterResult = shouldSendToAi(caption, hashtags);
 
     if (!filterResult.pass) {
-      updateRawPostStatus(rawPostId, 'REJECTED', `filter:${filterResult.reason}`);
+      await updateRawPostStatus(rawPostId, 'REJECTED', `filter:${filterResult.reason}`);
       summary.rejected++;
       console.log(`[Gate 2] Rejected post ${post.id}: ${filterResult.reason}`);
       continue;
@@ -269,25 +272,22 @@ export async function processScrapedPosts(posts) {
       const isApproved = aiResult.is_job_post && aiResult.is_tech_related;
 
       if (isApproved) {
-        // Wrap the two DB writes in a transaction for atomicity
-        const approvePost = db.transaction(() => {
-          updateRawPostStatus(rawPostId, 'APPROVED', null);
-          insertJobListing(rawPostId, {
-            ...aiResult,
-            publishedAt: post.createTimeISO ?? post.postedAt ?? null,
-          });
+        // Two sequential awaits — effectively atomic since posts are processed one at a time
+        await updateRawPostStatus(rawPostId, 'APPROVED', null);
+        await insertJobListing(rawPostId, {
+          ...aiResult,
+          publishedAt: post.createTimeISO ?? post.postedAt ?? null,
         });
-        approvePost();
         summary.approved++;
         console.log(`[Gate 3] ✓ Approved: "${aiResult.title}" at "${aiResult.company_name}"`);
       } else {
         const reason = aiResult.rejection_reason || `is_job_post=${aiResult.is_job_post}, is_tech_related=${aiResult.is_tech_related}`;
-        updateRawPostStatus(rawPostId, 'REJECTED', `ai:${reason}`);
+        await updateRawPostStatus(rawPostId, 'REJECTED', `ai:${reason}`);
         summary.rejected++;
         console.log(`[Gate 3] ✗ Rejected by AI: ${reason}`);
       }
     } catch (aiErr) {
-      updateRawPostStatus(rawPostId, 'ERROR', aiErr.message);
+      await updateRawPostStatus(rawPostId, 'ERROR', aiErr.message);
       summary.errors++;
       console.error(`[Gate 3] AI error for post ${post.id}:`, aiErr.message);
     }

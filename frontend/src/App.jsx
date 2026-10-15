@@ -23,6 +23,7 @@ export default function App() {
   const [loading,        setLoading]       = useState(true);
   const [error,          setError]         = useState(null);
   const [selectedJobId,  setSelectedJobId] = useState(null);
+  const [offset,         setOffset]        = useState(0);
 
   // Fetch jobs whenever filters change (including pagination offset)
   const loadJobs = useCallback(async (currentFilters, append = false) => {
@@ -42,11 +43,13 @@ export default function App() {
     }
   }, []);
 
-  // Reload from scratch when filters change (not pagination)
+  // Reload from scratch when filters change. Pagination does NOT go through
+  // `filters` — otherwise this effect would wipe the list on "Load more".
   useEffect(() => {
     setJobs([]);
     setTotalLoaded(0);
-    loadJobs(filters, false);
+    setOffset(0);
+    loadJobs({ ...filters, offset: 0 }, false);
   }, [filters, loadJobs]);
 
   const [syncing,        setSyncing]       = useState(false);
@@ -61,7 +64,8 @@ export default function App() {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Sync failed');
-      await loadJobs(filters);
+      setOffset(0);
+      await loadJobs({ ...filters, offset: 0 });
     } catch (err) {
       alert('Failed to trigger TikTok scrape: ' + err.message);
     } finally {
@@ -75,9 +79,9 @@ export default function App() {
   }
 
   function handleLoadMore() {
-    const nextFilters = { ...filters, offset: filters.offset + JOBS_PER_PAGE };
-    setFilters(nextFilters);
-    loadJobs(nextFilters, true /* append */);
+    const nextOffset = offset + JOBS_PER_PAGE;
+    setOffset(nextOffset);
+    loadJobs({ ...filters, offset: nextOffset }, true /* append */);
   }
 
   return (
@@ -95,14 +99,18 @@ export default function App() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              className="btn-primary text-xs"
-              title="Scrape fresh live posts from TikTok right now via Apify"
-            >
-              {syncing ? '⏳ Syncing...' : '🔄 Sync from TikTok'}
-            </button>
+            {/* Live scraping only works against the local dev server; in
+                production it runs on a schedule via GitHub Actions. */}
+            {import.meta.env.DEV && (
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="btn-primary text-xs"
+                title="Scrape fresh live posts from TikTok right now via Apify"
+              >
+                {syncing ? '⏳ Syncing...' : '🔄 Sync from TikTok'}
+              </button>
+            )}
             <a
               href="https://www.tiktok.com/tag/hiringcambodia"
               target="_blank"
@@ -137,7 +145,7 @@ export default function App() {
             <p className="font-medium">Failed to load jobs</p>
             <p className="text-sm mt-1">{error}</p>
             <button
-              onClick={() => loadJobs(filters)}
+              onClick={() => { setOffset(0); loadJobs({ ...filters, offset: 0 }); }}
               className="btn-ghost mt-4 mx-auto"
             >
               Try again

@@ -1,0 +1,38 @@
+name: Scrape TikTok jobs
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # every 6 hours (UTC)
+  workflow_dispatch:
+    inputs:
+      results_per_page:
+        description: 'Max results per hashtag / search query'
+        default: '20'
+
+# Never run two scrapes at once — they would race on the same posts
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Scrape and classify
+        run: npm run scrape
+        env:
+          APIFY_API_TOKEN:     ${{ secrets.APIFY_API_TOKEN }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          TURSO_DB_URL:        ${{ secrets.TURSO_DB_URL }}
+          TURSO_DB_AUTH_TOKEN: ${{ secrets.TURSO_DB_AUTH_TOKEN }}
+          RESULTS_PER_PAGE:    ${{ inputs.results_per_page || '20' }}

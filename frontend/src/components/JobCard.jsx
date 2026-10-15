@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 /**
  * JobCard.jsx — Displays a single job listing card
  *
@@ -40,6 +42,8 @@ function formatRelativeTime(isoString) {
  * @param {function} onClick — called when the user clicks to see full details
  */
 export default function JobCard({ job, onClick }) {
+  // TikTok CDN thumbnail URLs are signed and expire; fall back to the emoji
+  const [thumbFailed, setThumbFailed] = useState(false);
   const category = CATEGORY_LABELS[job.category] ?? CATEGORY_LABELS.OTHER;
   const postedAgo = formatRelativeTime(job.published_at ?? job.created_at);
 
@@ -56,12 +60,14 @@ export default function JobCard({ job, onClick }) {
     >
       {/* Thumbnail — loaded from TikTok CDN, not re-hosted */}
       <div className="relative aspect-video bg-gray-100 overflow-hidden">
-        {job.thumbnail_url ? (
+        {job.thumbnail_url && !thumbFailed ? (
           <img
             src={job.thumbnail_url}
             alt={`Thumbnail for ${job.title}`}
             className="w-full h-full object-cover"
             loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => setThumbFailed(true)}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-4xl">
