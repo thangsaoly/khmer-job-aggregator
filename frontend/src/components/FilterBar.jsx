@@ -1,138 +1,216 @@
-import { useState } from 'react';
-
-// Maps DB enum values to human-readable labels
-const CATEGORIES = [
-  { value: '',                   label: 'All Categories' },
-  { value: 'SOFTWARE_DEV',       label: '💻 Software Development' },
-  { value: 'DATA_AI',            label: '🧠 Data & AI' },
-  { value: 'UX_UI',              label: '🎨 UX / UI Design' },
-  { value: 'IT_SUPPORT_NETWORK', label: '🔧 IT Support & Network' },
-  { value: 'QA_TESTING',         label: '🧪 QA & Testing' },
-  { value: 'DIGITAL_MARKETING',  label: '📣 Digital Marketing' },
-  { value: 'OTHER',              label: '📁 Other' },
-];
+import { useEffect, useRef, useState } from 'react';
+import { CATEGORY_LIST } from '../lib/categories.js';
+import { IconSearch, IconPin, IconClose } from './Icons.jsx';
 
 /**
- * FilterBar — controls for category, internship toggle, location, and keyword
- * search. Calls onFilterChange with the updated filter object on every change.
+ * FilterBar — the control strip.
  *
- * @param {object}   filters          — current filter state from parent
- * @param {function} onFilterChange   — (newFilters) => void
+ * Search, location and the internship switch are debounced before they reach
+ * the parent, because every change re-queries the API. Category chips apply
+ * immediately — they're a single discrete choice.
+ *
+ * @param {object}   filters        — current filter state from parent
+ * @param {function} onFilterChange — (newFilters) => void
  */
 export default function FilterBar({ filters, onFilterChange }) {
-  // Local state for the search input so we can debounce before propagating
   const [searchInput, setSearchInput] = useState(filters.q ?? '');
+  const [locationInput, setLocationInput] = useState(filters.location ?? '');
 
-  function handleChange(key, value) {
-    onFilterChange({ ...filters, [key]: value, offset: 0 });
+  const searchRef = useRef(null);
+  const timers    = useRef({});
+  const filtersRef = useRef(filters);
+
+  // Keep the latest filters reachable from debounced callbacks
+  filtersRef.current = filters;
+
+  // Sync local inputs when the parent resets filters (e.g. RESET pressed)
+  useEffect(() => { setSearchInput(filters.q ?? ''); },       [filters.q]);
+  useEffect(() => { setLocationInput(filters.location ?? ''); }, [filters.location]);
+
+  // Clear pending debounces on unmount
+  useEffect(() => () => {
+    Object.values(timers.current).forEach(clearTimeout);
+  }, []);
+
+  /** Apply a filter change immediately. */
+  function apply(key, value) {
+    onFilterChange({ ...filtersRef.current, [key]: value, offset: 0 });
   }
 
-  // Debounce search: wait 400ms after the user stops typing
+  /** Apply a filter change after a short pause — for free-text inputs. */
+  function applyDebounced(key, value) {
+    clearTimeout(timers.current[key]);
+    timers.current[key] = setTimeout(() => apply(key, value), 350);
+  }
+
   function handleSearchChange(e) {
     const value = e.target.value;
     setSearchInput(value);
-
-    clearTimeout(window._searchDebounce);
-    window._searchDebounce = setTimeout(() => {
-      handleChange('q', value);
-    }, 400);
+    applyDebounced('q', value);
   }
 
-  function clearFilters() {
+  function handleLocationChange(e) {
+    const value = e.target.value;
+    setLocationInput(value);
+    applyDebounced('location', value);
+  }
+
+  function clearAll() {
+    Object.values(timers.current).forEach(clearTimeout);
     setSearchInput('');
+    setLocationInput('');
     onFilterChange({ category: '', isInternship: undefined, location: '', q: '', offset: 0 });
   }
 
-  const hasActiveFilters = filters.category || filters.isInternship !== undefined || filters.location || filters.q;
+  // "/" focuses search from anywhere on the page
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const el = e.target;
+      if (el instanceof HTMLElement &&
+          (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+
+      e.preventDefault();
+      searchRef.current?.focus();
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const internshipOnly = filters.isInternship === true;
+  const hasActiveFilters =
+    Boolean(filters.category) || internshipOnly ||
+    Boolean(filters.location) || Boolean(filters.q);
 
   return (
-    <div className="card p-4 mb-6">
-      <div className="flex flex-wrap gap-3 items-end">
+    <div className="rounded-xl border border-ink-700/70 bg-ink-900/95 shadow-record backdrop-blur-xl lg:sticky lg:top-16 lg:z-30">
+      <div className="p-3 sm:p-4">
 
-        {/* Keyword search */}
-        <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            Search
-          </label>
-          <input
-            type="text"
-            placeholder="React, Flutter, UX Design..."
-            value={searchInput}
-            onChange={handleSearchChange}
-            className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300
-                       focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent"
-          />
-        </div>
-
-        {/* Category */}
-        <div className="min-w-[200px]">
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            Category
-          </label>
-          <select
-            value={filters.category ?? ''}
-            onChange={(e) => handleChange('category', e.target.value)}
-            className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300
-                       focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent
-                       bg-white"
-          >
-            {CATEGORIES.map((cat) => (
-              <option key={cat.value} value={cat.value}>
-                {cat.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Location */}
-        <div className="min-w-[160px]">
-          <label className="block text-xs font-medium text-gray-500 mb-1">
-            Location
-          </label>
-          <input
-            type="text"
-            placeholder="Phnom Penh"
-            value={filters.location ?? ''}
-            onChange={(e) => handleChange('location', e.target.value)}
-            className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300
-                       focus:outline-none focus:ring-2 focus:ring-brand-400 focus:border-transparent"
-          />
-        </div>
-
-        {/* Internship toggle */}
-        <div className="flex flex-col gap-1">
-          <label className="block text-xs font-medium text-gray-500">
-            Type
-          </label>
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white h-[38px]">
+        {/* ── Row 1 — search, location, internship switch ── */}
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+          {/* Keyword search */}
+          <div className="relative flex-1 min-w-0">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-mute">
+              <IconSearch />
+            </span>
             <input
-              type="checkbox"
-              id="internship-toggle"
-              checked={filters.isInternship === true}
-              onChange={(e) =>
-                handleChange('isInternship', e.target.checked ? true : undefined)
-              }
-              className="w-4 h-4 accent-brand-500 cursor-pointer"
+              ref={searchRef}
+              type="text"
+              value={searchInput}
+              onChange={handleSearchChange}
+              placeholder="Search roles, skills, companies"
+              aria-label="Search roles, skills or companies"
+              className="field pl-9 pr-10"
             />
-            <label
-              htmlFor="internship-toggle"
-              className="text-sm text-gray-700 cursor-pointer whitespace-nowrap select-none"
+            {/* Keyboard hint — only useful while the field is idle */}
+            {!searchInput && (
+              <kbd
+                className="pointer-events-none absolute right-2.5 top-1/2 hidden -translate-y-1/2
+                           rounded border border-ink-700 bg-ink-850 px-1.5 py-0.5
+                           font-mono text-[10px] text-fg-mute sm:block"
+              >
+                /
+              </kbd>
+            )}
+          </div>
+
+          <div className="flex gap-2.5">
+            {/* Location */}
+            <div className="relative flex-1 sm:w-48 sm:flex-none">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-mute">
+                <IconPin />
+              </span>
+              <input
+                type="text"
+                value={locationInput}
+                onChange={handleLocationChange}
+                placeholder="Location"
+                aria-label="Filter by location"
+                className="field pl-8"
+              />
+            </div>
+
+            {/* Internship toggle */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={internshipOnly}
+              onClick={() => apply('isInternship', internshipOnly ? undefined : true)}
+              className="group inline-flex shrink-0 items-center gap-2.5 rounded-lg border
+                         border-ink-700 bg-ink-800/80 px-3 py-2.5 transition-colors duration-200
+                         hover:bg-ink-800"
+              title="Show internships only"
             >
-              Internships only
-            </label>
+              <span
+                className={`relative h-[18px] w-8 shrink-0 rounded-full border transition-colors duration-200 ${
+                  internshipOnly
+                    ? 'border-ember-500/70 bg-ember-500/30'
+                    : 'border-ink-700 bg-ink-850'
+                }`}
+              >
+                <span
+                  className={`absolute top-[2px] h-[12px] w-[12px] rounded-full transition-all duration-200 ease-out ${
+                    internshipOnly ? 'left-[16px] bg-ember-400' : 'left-[2px] bg-fg-mute'
+                  }`}
+                />
+              </span>
+              <span className="whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.12em] text-fg-dim transition-colors group-hover:text-fg">
+                Internships<span className="hidden sm:inline">&nbsp;only</span>
+              </span>
+            </button>
           </div>
         </div>
 
-        {/* Clear filters — only show when something is active */}
-        {hasActiveFilters && (
-          <button
-            onClick={clearFilters}
-            className="btn-ghost text-gray-500 self-end"
-            aria-label="Clear all filters"
-          >
-            ✕ Clear
-          </button>
-        )}
+        {/* ── Row 2 — category chips ── */}
+        <div className="mt-3 flex items-center gap-3 border-t border-ink-700/50 pt-3">
+          <span className="mono-label hidden shrink-0 sm:block">Discipline</span>
+
+          {/* min-w-0 lets the strip shrink and scroll instead of pushing
+              the reset button off the row */}
+          <div className="scroll-x flex min-w-0 flex-1 gap-2 overflow-x-auto pb-0.5">
+            {CATEGORY_LIST.map((cat) => {
+              const active = (filters.category ?? '') === cat.value;
+              const hue = cat.rgb;
+
+              return (
+                <button
+                  key={cat.value || 'ALL'}
+                  type="button"
+                  onClick={() => apply('category', cat.value)}
+                  aria-pressed={active}
+                  className="chip"
+                  style={{ '--chip-hue': hue }}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full transition-opacity"
+                    style={{
+                      background: `rgb(${hue})`,
+                      opacity: active ? 1 : 0.55,
+                      boxShadow: active ? `0 0 8px rgb(${hue})` : 'none',
+                    }}
+                  />
+                  {cat.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Reset — only when something is active */}
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={clearAll}
+              className="btn btn-quiet shrink-0 !px-2.5 !py-1.5"
+              aria-label="Reset all filters"
+            >
+              <IconClose className="h-3.5 w-3.5" />
+              Reset
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

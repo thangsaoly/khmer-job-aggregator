@@ -1,41 +1,219 @@
-/* Tailwind base layers */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Custom base styles */
+/* ═══════════════════════════════════════════════════════════════════════════
+   DISPATCH — design tokens
+   A dark "dispatch board" for Cambodian tech roles. Cool graphite surfaces,
+   ember accent, one hue per job category.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
 @layer base {
-  html {
-    font-family: 'Kantumruy Pro', Inter, system-ui, sans-serif;
-    @apply antialiased text-gray-900 bg-gray-50;
+  :root {
+    /* Surfaces */
+    --c-ink-950: 8 9 11;
+    --c-ink-900: 12 14 17;
+    --c-ink-850: 17 20 24;
+    --c-ink-800: 23 26 31;
+    --c-ink-700: 34 38 45;
+
+    /* Foreground */
+    --c-fg: 240 242 245;
+    --c-fg-dim: 160 167 178;
+    --c-fg-mute: 106 114 124;
+
+    /* Ember — primary accent */
+    --c-ember-300: 255 165 110;
+    --c-ember-400: 255 137 66;
+    --c-ember-500: 255 106 31;
+    --c-ember-600: 224 82 12;
+
+    /* Mint — salary / live */
+    --c-mint-400: 92 226 172;
+    --c-mint-500: 52 199 143;
+
+    /* Ice — informational */
+    --c-ice-400: 125 211 252;
   }
 
-  /* Smooth scrolling for the whole page */
   html {
+    color-scheme: dark;
     scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
   }
+
+  body {
+    @apply bg-ink-950 text-fg font-sans antialiased;
+    /* Faint graph-paper grid — texture, not decoration */
+    background-image:
+      linear-gradient(rgb(255 255 255 / 0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(255 255 255 / 0.022) 1px, transparent 1px);
+    background-size: 56px 56px;
+    background-attachment: fixed;
+  }
+
+  /* Top lighting — keeps the header from reading as a flat slab */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: 460px;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(60% 100% at 22% 0%, rgb(var(--c-ember-500) / 0.10), transparent 72%);
+  }
+
+  ::selection {
+    background: rgb(var(--c-ember-500) / 0.32);
+    color: rgb(var(--c-fg));
+  }
+
+  /* Focus ring — consistent across every interactive element */
+  :focus-visible {
+    outline: 2px solid rgb(var(--c-ember-500) / 0.85);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Slim dark scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--c-ink-700)) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-ink-700));
+    border-radius: 99px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: rgb(var(--c-fg-mute)); }
+
+  /* Kill the number-input spinners */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 }
 
-/* Custom utility classes */
 @layer components {
-  /* Card shadow used on job cards and modals */
-  .card {
-    @apply bg-white rounded-2xl shadow-sm border border-gray-100;
+  /* ── Type ────────────────────────────────────────────────────────────── */
+
+  /* Micro label: uppercase mono, wide tracking. Used for every metadata key. */
+  .mono-label {
+    @apply font-mono text-[10px] uppercase tracking-[0.16em] text-fg-mute;
   }
 
-  /* Primary button style */
-  .btn-primary {
-    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
-           bg-brand-500 hover:bg-brand-600 active:bg-brand-700
-           text-white font-medium text-sm
-           transition-colors duration-150;
+  /* ── Controls ────────────────────────────────────────────────────────── */
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-2
+           rounded-lg border border-ink-700 bg-ink-850 px-3.5 py-2
+           font-mono text-[11px] uppercase tracking-[0.14em] text-fg-dim
+           transition-all duration-200 ease-out
+           hover:border-ink-700/80 hover:bg-ink-800 hover:text-fg
+           active:scale-[0.985]
+           disabled:pointer-events-none disabled:opacity-40;
   }
 
-  /* Ghost / outline button */
-  .btn-ghost {
-    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg
-           border border-gray-300 hover:border-gray-400
-           text-gray-700 font-medium text-sm
-           transition-colors duration-150;
+  .btn-ember {
+    @apply border-transparent bg-ember-500 text-ink-950 font-bold
+           hover:bg-ember-400 hover:text-ink-950
+           shadow-[0_10px_30px_-14px_rgb(var(--c-ember-500)/0.9)];
+  }
+
+  .btn-quiet {
+    @apply border-transparent bg-transparent text-fg-mute hover:text-fg hover:bg-ink-850;
+  }
+
+  /* Text input / select well */
+  .field {
+    @apply w-full rounded-lg border border-ink-700 bg-ink-800/80 px-3 py-2.5
+           text-sm text-fg placeholder:text-fg-mute/70
+           transition-colors duration-200
+           hover:border-ink-700
+           focus:border-ember-500/60 focus:bg-ink-800 focus:outline-none
+           focus:ring-2 focus:ring-ember-500/20;
+  }
+
+  /* ── Category chip ───────────────────────────────────────────────────── */
+
+  .chip {
+    @apply inline-flex shrink-0 items-center gap-2 rounded-full border
+           border-ink-700 bg-ink-850/60 px-3 py-1.5
+           font-mono text-[11px] uppercase tracking-[0.12em] text-fg-dim
+           transition-all duration-200 ease-out
+           hover:border-ink-700 hover:bg-ink-800 hover:text-fg
+           active:scale-[0.97];
+  }
+
+  .chip[aria-pressed='true'] {
+    border-color: rgb(var(--chip-hue, var(--c-ember-500)) / 0.55);
+    background-color: rgb(var(--chip-hue, var(--c-ember-500)) / 0.14);
+    color: rgb(var(--chip-hue, var(--c-ember-500)));
+  }
+
+  /* ── Record card ─────────────────────────────────────────────────────── */
+
+  .record {
+    @apply relative flex overflow-hidden rounded-xl border border-ink-700/80
+           bg-ink-900 shadow-record
+           transition-[border-color,background-color,transform] duration-300 ease-out;
+    animation: rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .record:hover {
+    @apply border-ink-700 bg-ink-850;
+  }
+
+  /* Category status light — the vertical spine on the record's leading edge */
+  .record-spine {
+    @apply absolute inset-y-0 left-0 w-[3px];
+    background: rgb(var(--cat, var(--c-ember-500)) / 0.85);
+  }
+
+  .record:hover .record-spine {
+    background: rgb(var(--cat, var(--c-ember-500)));
+    box-shadow: 0 0 18px 0 rgb(var(--cat, var(--c-ember-500)) / 0.85);
+  }
+
+  /* Poster thumbnail well */
+  .record-thumb {
+    @apply relative shrink-0 overflow-hidden bg-ink-800;
+  }
+
+  /* Poster image. object-fit is set per element — a wide poster fills the
+     slot, a portrait one is letterboxed — so no fit is forced here. */
+  .record-thumb img {
+    @apply h-full w-full transition-transform duration-500 ease-out;
+  }
+
+  .record:hover .record-thumb img {
+    transform: scale(1.04);
+  }
+
+  /* ── Misc ────────────────────────────────────────────────────────────── */
+
+  /* Hairline rule used between stacked records */
+  .rule {
+    @apply h-px w-full bg-ink-700/70;
+  }
+
+  /* Hide scrollbar on horizontally scrollable strips */
+  .scroll-x {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scroll-x::-webkit-scrollbar { display: none; }
+}
+
+/* Respect users who ask for less motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

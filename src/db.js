@@ -237,4 +237,13 @@ export async function getJobById(id) {
   return result.rows[0] ?? null;
 }
 
+export async function updateRawPostThumbnail(rawPostId, thumbnailUrl) {
+  await db.execute({
+    sql: 'UPDATE raw_ingested_posts SET thumbnail_url = ? WHERE id = ?',
+    args: [thumbnailUrl, rawPostId],
+  });
+}
+
+export { db };
 export default db;
+

@@ -114,7 +114,7 @@ Extract all job information you can find. Respond only with the required JSON ob
   // Attach thumbnail image if a URL was provided
   if (thumbnailUrl) {
     try {
-      const imageResponse = await fetch(thumbnailUrl);
+      const imageResponse = await fetch(thumbnailUrl, { signal: AbortSignal.timeout(5000) });
       // Gemini rejects the whole request on an unsupported mimeType, so only
       // attach formats it accepts (TikTok CDN sometimes serves octet-stream).
       const contentType = (imageResponse.headers.get('content-type') ?? '').split(';')[0].trim();
@@ -182,6 +182,22 @@ Extract all job information you can find. Respond only with the required JSON ob
   throw lastError;
 }
 
+let lastAiCallTimestamp = 0;
+const MIN_AI_INTERVAL_MS = 4000; // Paced to adhere to 15 req/min free-tier quota
+
+/**
+ * Paces AI calls only when needed based on elapsed time since the previous call.
+ * Avoids any delay on the first call or when sufficient time has naturally elapsed.
+ */
+async function paceAiCall() {
+  const now = Date.now();
+  const elapsed = now - lastAiCallTimestamp;
+  if (elapsed < MIN_AI_INTERVAL_MS && lastAiCallTimestamp > 0) {
+    await new Promise((resolve) => setTimeout(resolve, MIN_AI_INTERVAL_MS - elapsed));
+  }
+  lastAiCallTimestamp = Date.now();
+}
+
 // ─── Batch Processor ──────────────────────────────────────────────────────────
 
 /**
@@ -195,15 +211,25 @@ Extract all job information you can find. Respond only with the required JSON ob
  * atomicity and performance.
  *
  * @param {object[]} posts — raw posts from the scraper
+ * @param {object}   [options]
+ * @param {Function} [options.onProgress] — callback for real-time progress
  * @returns {Promise<object>} — summary counts
  */
-export async function processScrapedPosts(posts) {
+export async function processScrapedPosts(posts, { onProgress } = {}) {
   const summary = { processed: 0, approved: 0, rejected: 0, skipped: 0, errors: 0 };
 
   // Process posts sequentially to avoid hitting Gemini rate limits.
   // Each post may make one network call (thumbnail fetch) + one AI API call.
   for (const post of posts) {
     summary.processed++;
+
+    onProgress?.({
+      stage: 'ingesting',
+      message: `Analyzing post ${summary.processed}/${posts.length}...`,
+      current: summary.processed,
+      total: posts.length,
+      summary: { ...summary },
+    });
 
     // ── Gate 1: DB Deduplication ─────────────────────────────────────────────
     const existing = await findRawPostByExternalId(post.platform ?? 'TIKTOK', post.id);
@@ -263,8 +289,8 @@ export async function processScrapedPosts(posts) {
 
     // ── Gate 3: AI Classification ────────────────────────────────────────────
     try {
-      // Free-tier pacing: ensure at least 4.5s between AI requests (max ~13 req/min)
-      await new Promise((resolve) => setTimeout(resolve, 4500));
+      // Dynamic pacing: only sleeps if less than 4s elapsed since the last AI call
+      await paceAiCall();
 
       const thumbnailUrl = post.covers?.default ?? post.thumbnailUrl ?? null;
       const aiResult     = await analyzeWithAi(caption, thumbnailUrl);

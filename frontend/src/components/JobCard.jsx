@@ -1,161 +1,238 @@
 import { useState } from 'react';
+import { getCategory } from '../lib/categories.js';
+import { formatAge, formatIndex } from '../lib/format.js';
+import { IconArrowUpRight, IconCash, IconPin } from './Icons.jsx';
 
 /**
- * JobCard.jsx — Displays a single job listing card
+ * JobCard.jsx — one indexed record on the dispatch board.
  *
- * Legal note: Thumbnails are loaded directly from the TikTok CDN URL stored
+ * The poster is the hiring ad itself, so it leads: the card is the document,
+ * and the panel underneath is its index entry. Nothing is overlaid on the
+ * poster — the creator's own layout stays readable — so all metadata lives in
+ * the panel below.
+ *
+ * TikTok cover frames are portrait (9:16), so a landscape slot crops them.
+ * The crop is biased toward the top of the frame, where hiring posts put the
+ * role title. The panel below carries the details the crop loses.
+ *
+ * Legal note: thumbnails are loaded directly from the TikTok CDN URL stored
  * in the DB. We never re-host or copy media. Every card links back to the
  * original post and credits the creator.
- */
-
-// Maps DB enum values to emoji + short label pairs for badges
-const CATEGORY_LABELS = {
-  SOFTWARE_DEV:       { emoji: '💻', label: 'Software Dev' },
-  DATA_AI:            { emoji: '🧠', label: 'Data & AI' },
-  UX_UI:              { emoji: '🎨', label: 'UX / UI' },
-  IT_SUPPORT_NETWORK: { emoji: '🔧', label: 'IT Support' },
-  QA_TESTING:         { emoji: '🧪', label: 'QA Testing' },
-  DIGITAL_MARKETING:  { emoji: '📣', label: 'Marketing' },
-  OTHER:              { emoji: '📁', label: 'Other' },
-};
-
-/**
- * Format an ISO date string as relative time (e.g. "3 days ago").
- * Falls back to a locale date string if the Intl API is unavailable.
- */
-function formatRelativeTime(isoString) {
-  if (!isoString) return null;
-
-  const date = new Date(isoString);
-  const diffMs = Date.now() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 30)  return `${diffDays} days ago`;
-  if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
-  return `${Math.floor(diffDays / 365)} years ago`;
-}
-
-/**
- * @param {object} job  — row from job_listings joined with raw_ingested_posts
+ *
+ * @param {object}   job     — row from job_listings joined with raw_ingested_posts
  * @param {function} onClick — called when the user clicks to see full details
  */
 export default function JobCard({ job, onClick }) {
-  // TikTok CDN thumbnail URLs are signed and expire; fall back to the emoji
   const [thumbFailed, setThumbFailed] = useState(false);
-  const category = CATEGORY_LABELS[job.category] ?? CATEGORY_LABELS.OTHER;
-  const postedAgo = formatRelativeTime(job.published_at ?? job.created_at);
+  const [imgLoaded, setImgLoaded] = useState(false);
+
+  const category = getCategory(job.category);
+  const postedAgo = formatAge(job.published_at ?? job.created_at);
+  const isInternship = job.is_internship === 1;
+  const salary = job.salary_range?.trim();
+
+  // Route through proxy endpoint for automatic signing, caching, and fallback
+  const thumbnailSrc = `/api/jobs/${job.id}/thumbnail`;
 
   return (
     <article
-      className="card overflow-hidden flex flex-col cursor-pointer
-                 hover:shadow-md hover:-translate-y-0.5
-                 transition-all duration-200"
+      className="record group flex flex-col"
+      style={{ '--cat': category.rgb }}
       onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
-      aria-label={`${job.title} at ${job.company_name ?? 'Unknown company'}`}
     >
-      {/* Thumbnail — loaded from TikTok CDN, not re-hosted */}
-      <div className="relative aspect-video bg-gray-100 overflow-hidden">
-        {job.thumbnail_url && !thumbFailed ? (
-          <img
-            src={job.thumbnail_url}
-            alt={`Thumbnail for ${job.title}`}
-            className="w-full h-full object-cover"
-            loading="lazy"
-            referrerPolicy="no-referrer"
-            onError={() => setThumbFailed(true)}
-          />
+      <span className="record-spine" aria-hidden="true" />
+
+      {/* ── Poster — the hiring ad ── */}
+      <div className="record-thumb relative aspect-video w-full overflow-hidden border-b border-ink-700/50 bg-ink-950">
+        {!thumbFailed ? (
+          <>
+            {!imgLoaded && (
+              <div className="absolute inset-0 animate-pulse bg-ink-850" />
+            )}
+            <img
+              src={thumbnailSrc}
+              alt={`Hiring poster for ${job.title}`}
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              onLoad={() => setImgLoaded(true)}
+              onError={() => setThumbFailed(true)}
+              className={`absolute inset-0 h-full w-full object-cover object-[center_25%] transition-opacity duration-300 ${
+                imgLoaded ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+          </>
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-4xl">
-            {category.emoji}
-          </div>
+          <FallbackPoster job={job} category={category} />
         )}
-
-        {/* Internship badge — overlaid on thumbnail */}
-        {job.is_internship === 1 && (
-          <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full
-                           bg-purple-600 text-white text-xs font-semibold">
-            Internship
-          </span>
-        )}
-
-        {/* TikTok source badge */}
-        <span className="absolute top-2 right-2 px-2 py-0.5 rounded-full
-                         bg-black/70 text-white text-xs font-medium">
-          TikTok
-        </span>
       </div>
 
-      {/* Card body */}
-      <div className="p-4 flex flex-col flex-1 gap-2">
+      {/* ── Index entry ── */}
+      <div className="flex flex-1 flex-col p-4">
 
-        {/* Category badge */}
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full
-                         bg-brand-50 text-brand-700 text-xs font-medium w-fit">
-          {category.emoji} {category.label}
-        </span>
+        {/* Archive number, discipline, age */}
+        <div className="flex items-center gap-x-3 gap-y-1">
+          <span className="mono-label">№ {formatIndex(job.id)}</span>
+          <span className="h-2.5 w-px bg-ink-700" />
+          <span
+            className="flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.1em]"
+            style={{ color: `rgb(${category.rgb})` }}
+          >
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: `rgb(${category.rgb})` }}
+            />
+            {category.label}
+          </span>
+          {postedAgo && (
+            <span className="mono-label ml-auto shrink-0">{postedAgo}</span>
+          )}
+        </div>
 
-        {/* Title + company */}
-        <div>
-          <h3 className="font-semibold text-gray-900 leading-snug line-clamp-2">
+        {/* Title */}
+        <h3 className="mt-2.5 font-display text-[17px] font-semibold leading-snug text-fg">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            className="line-clamp-2 text-left transition-colors duration-200 hover:text-ember-300"
+          >
             {job.title}
-          </h3>
-          {job.company_name && (
-            <p className="text-sm text-gray-500 mt-0.5">{job.company_name}</p>
+          </button>
+        </h3>
+
+        {/* Company + internship flag */}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate text-[13px] text-fg-dim">
+            {job.company_name || <span className="text-fg-mute">Company not listed</span>}
+          </span>
+          {isInternship && (
+            <span className="shrink-0 rounded border border-ice-400/35 bg-ice-400/10 px-1.5 py-px
+                             font-mono text-[9px] uppercase tracking-[0.14em] text-ice-400">
+              Internship
+            </span>
           )}
         </div>
 
-        {/* Meta row: location + salary */}
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500 mt-auto pt-1">
+        {/* Location + salary */}
+        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-fg-mute">
           {job.location && (
-            <span className="flex items-center gap-1">
-              📍 {job.location}
+            <span className="flex min-w-0 items-center gap-1.5" title={job.location}>
+              <IconPin className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 truncate">{job.location}</span>
             </span>
           )}
-          {job.salary_range && (
-            <span className="flex items-center gap-1 text-green-700 font-medium">
-              💵 {job.salary_range}
+
+          {salary && (
+            <span className="flex min-w-0 items-center gap-1.5 font-medium text-mint-400">
+              <IconCash className="h-3 w-3 shrink-0" />
+              <span className="min-w-0 truncate">{salary}</span>
             </span>
           )}
         </div>
 
-        {/* Footer: attribution + original link */}
-        <div className="border-t border-gray-100 pt-2 mt-1
-                        flex items-center justify-between gap-2">
-          {/* Creator credit */}
+        {/* ── Footer ── */}
+        <div className="mt-auto flex items-center justify-between gap-3 border-t border-ink-700/50 pt-3">
           <a
             href={job.post_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-gray-400 hover:text-brand-500 transition-colors truncate"
-            onClick={(e) => e.stopPropagation()} // Don't open modal when clicking creator
+            onClick={(e) => e.stopPropagation()}
+            className="truncate font-mono text-[11px] text-fg-mute transition-colors hover:text-ice-400"
             aria-label={`View @${job.author_handle}'s original TikTok post`}
           >
             @{job.author_handle ?? 'unknown'}
           </a>
 
-          <div className="flex items-center gap-2 shrink-0">
-            {postedAgo && (
-              <span className="text-xs text-gray-400">{postedAgo}</span>
-            )}
-            {/* Primary CTA: view original TikTok */}
-            <a
-              href={job.post_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              className="btn-primary py-1 px-2 text-xs"
-              aria-label="View original post on TikTok"
-            >
-              View ↗
-            </a>
-          </div>
+          <a
+            href={job.post_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="group/apply inline-flex shrink-0 items-center gap-1 rounded-md border border-ink-700
+                       px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[0.16em] text-fg-dim
+                       transition-all duration-200 ease-out hover:border-ember-500/60 hover:bg-ember-500/10 hover:text-ember-300"
+            aria-label="View original post on TikTok"
+          >
+            Apply
+            <IconArrowUpRight className="h-3 w-3 transition-transform duration-200 ease-out group-hover/apply:translate-x-0.5 group-hover/apply:-translate-y-0.5" />
+          </a>
         </div>
       </div>
     </article>
+  );
+}
+
+/**
+ * Stand-in for missing thumbnails — a branded, editorial card graphic
+ * with category-themed ambient gradients and crisp typography.
+ */
+function FallbackPoster({ job, category }) {
+  const initial = (job?.company_name ? job.company_name.trim().charAt(0) : 'K').toUpperCase();
+
+  return (
+    <div
+      className="relative flex h-full w-full flex-col justify-between p-3.5 overflow-hidden"
+      style={{
+        background: `radial-gradient(ellipse at 85% 15%, rgba(var(--cat), 0.25) 0%, rgba(10, 12, 16, 0.95) 70%)`,
+      }}
+    >
+      {/* Decorative Grid Pattern */}
+      <div
+        className="pointer-events-none absolute inset-0 opacity-15"
+        style={{
+          backgroundImage:
+            'linear-gradient(to right, rgba(255,255,255,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.08) 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
+        }}
+      />
+
+      {/* Top row: category pill + Khmer tech tag */}
+      <div className="relative z-10 flex items-center justify-between">
+        <span
+          className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider font-semibold"
+          style={{
+            backgroundColor: 'rgba(var(--cat), 0.15)',
+            color: 'rgb(var(--cat))',
+            border: '1px solid rgba(var(--cat), 0.3)',
+          }}
+        >
+          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: 'rgb(var(--cat))' }} />
+          {category?.label ?? 'Tech'}
+        </span>
+        <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-fg-mute/50">
+          Khmer Tech
+        </span>
+      </div>
+
+      {/* Middle row: company avatar + job title preview */}
+      <div className="relative z-10 my-auto">
+        <div className="flex items-center gap-2 mb-1">
+          <span
+            className="flex h-6 w-6 items-center justify-center rounded-md font-mono text-xs font-bold"
+            style={{
+              backgroundColor: 'rgba(var(--cat), 0.2)',
+              color: 'rgb(var(--cat))',
+              border: '1px solid rgba(var(--cat), 0.35)',
+            }}
+          >
+            {initial}
+          </span>
+          <span className="text-xs font-medium text-fg-dim truncate">
+            {job?.company_name || 'Hiring Company'}
+          </span>
+        </div>
+        <p className="line-clamp-2 text-sm font-bold text-fg leading-snug">
+          {job?.title}
+        </p>
+      </div>
+
+      {/* Bottom row: location + indicator */}
+      <div className="relative z-10 flex items-center justify-between font-mono text-[9px] text-fg-mute">
+        <span>📍 {job?.location || 'Phnom Penh'}</span>
+        <span style={{ color: 'rgb(var(--cat))' }} className="font-semibold tracking-wider">
+          DISPATCH ↗
+        </span>
+      </div>
+    </div>
   );
 }

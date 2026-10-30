@@ -63,6 +63,20 @@ const TECH_PATTERNS = [
 ];
 const TECH_REGEX = new RegExp(`(${TECH_PATTERNS.join('|')})`, 'i');
 
+// ─── Excluded Non-Tech Roles (Fast Reject) ────────────────────────────────────
+// If a post clearly targets a common non-tech occupation and has no tech signal,
+// reject early to avoid spending 4.5s delays + Gemini API calls on it.
+const EXCLUDED_ROLES_PATTERNS = [
+  'cleaner', 'cleaning', 'maid', 'housekeeping',
+  'driver', 'delivery\\s*rider', 'security\\s*guard',
+  'waiter', 'waitress', 'bartender', 'barista', 'cook', 'chef', 'dishwasher',
+  'salon', 'spa', 'massage', 'hairdresser', 'barber',
+  'cashier', 'receptionist', 'translator',
+  // Khmer non-tech roles
+  'អ្នកបោសសំអាត', 'អ្នកបើកបរ', 'សន្តិសុខ', 'អ្នកគិតលុយ', 'អ្នករត់តុ', 'អ្នកបកប្រែ', 'មេការសំណង់',
+];
+const EXCLUDED_REGEX = new RegExp(`(${EXCLUDED_ROLES_PATTERNS.join('|')})`, 'i');
+
 // ─── Main Export ──────────────────────────────────────────────────────────────
 
 /**
@@ -74,6 +88,13 @@ const TECH_REGEX = new RegExp(`(${TECH_PATTERNS.join('|')})`, 'i');
  */
 export function shouldSendToAi(caption = '', hashtags = []) {
   const normalizedHashtags = hashtags.map((h) => h.toLowerCase().replace(/^#/, ''));
+  const searchText = `${caption} ${hashtags.join(' ')}`;
+  const hasTechSignal = TECH_REGEX.test(searchText);
+
+  // Early exit: explicitly mentions a non-tech job and lacks tech keywords
+  if (EXCLUDED_REGEX.test(caption) && !hasTechSignal) {
+    return { pass: false, reason: 'excluded_non_tech_role' };
+  }
 
   // Gate 2A — High-signal hashtag auto-pass
   const hasHighSignalHashtag = normalizedHashtags.some((tag) =>
@@ -85,10 +106,7 @@ export function shouldSendToAi(caption = '', hashtags = []) {
   }
 
   // Gate 2B — Must match BOTH hiring and tech patterns
-  const searchText = `${caption} ${hashtags.join(' ')}`;
-
   const hasHiringSignal = HIRING_REGEX.test(searchText);
-  const hasTechSignal   = TECH_REGEX.test(searchText);
 
   if (hasHiringSignal && hasTechSignal) {
     return { pass: true, reason: 'keyword_match' };

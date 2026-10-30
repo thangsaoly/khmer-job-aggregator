@@ -13,8 +13,8 @@ const apify = new ApifyClient({
   token: process.env.APIFY_API_TOKEN,
 });
 
-// High-value Cambodian hiring hashtags & keywords on TikTok
-const TARGET_HASHTAGS = [
+// Full coverage targets for scheduled batch scrapes (GitHub Actions / manual deep scrape)
+const ALL_HASHTAGS = [
   'ជួលបុគ្គលិក',
   'រើសបុគ្គលិក',
   'ដំណឹងជ្រើសរើសបុគ្គលិក',
@@ -23,31 +23,52 @@ const TARGET_HASHTAGS = [
   'internshipcambodia',
 ];
 
-const TARGET_SEARCH_QUERIES = [
+const ALL_SEARCH_QUERIES = [
   'hiring developer cambodia',
   'internship IT phnom penh',
   'ការងារ IT ភ្នំពេញ',
 ];
 
+// High-yield top targets for fast interactive UI sync (3 targets instead of 9, ~3x faster)
+const FAST_HASHTAGS = [
+  'hiringcambodia',
+  'internshipcambodia',
+];
+
+const FAST_SEARCH_QUERIES = [
+  'hiring developer cambodia',
+];
+
 /**
  * Run a live scrape against TikTok using Apify, then ingest the results.
  *
- * @param {object} options
- * @param {number} [options.resultsPerPage=20] Max results per query/hashtag
+ * @param {object}   options
+ * @param {number}   [options.resultsPerPage=20] Max results per query/hashtag
+ * @param {boolean}  [options.fast=false] Use high-yield top targets for quick execution
+ * @param {Function} [options.onProgress] Real-time progress callback
  * @returns {Promise<{ scrapedCount: number, summary: object }>}
  */
-export async function scrapeAndIngestTikTok({ resultsPerPage = 20 } = {}) {
+export async function scrapeAndIngestTikTok({ resultsPerPage = 20, fast = false, onProgress } = {}) {
   if (!process.env.APIFY_API_TOKEN) {
     throw new Error('APIFY_API_TOKEN is not set in environment.');
   }
 
-  console.log(`[Scraper] Starting live TikTok scrape on Apify...`);
+  const hashtags = fast ? FAST_HASHTAGS : ALL_HASHTAGS;
+  const searchQueries = fast ? FAST_SEARCH_QUERIES : ALL_SEARCH_QUERIES;
+
+  console.log(`[Scraper] Starting live TikTok scrape on Apify (fast=${fast}, perPage=${resultsPerPage}, targets=${hashtags.length + searchQueries.length})...`);
+  onProgress?.({
+    stage: 'scraping',
+    message: fast ? 'Quick-crawling TikTok via Apify (top targets)...' : 'Scraping TikTok posts via Apify...',
+    current: 0,
+    total: 0,
+  });
 
   // Run the actor on Apify
   const run = await apify.actor('clockworks/tiktok-scraper').call(
     {
-      hashtags: TARGET_HASHTAGS,
-      searchQueries: TARGET_SEARCH_QUERIES,
+      hashtags,
+      searchQueries,
       resultsPerPage,
       shouldDownloadVideos: false,
       shouldDownloadCovers: false,
@@ -98,7 +119,14 @@ export async function scrapeAndIngestTikTok({ resultsPerPage = 20 } = {}) {
     });
 
   console.log(`[Scraper] Processing ${normalizedPosts.length} normalized posts through 3-gate AI pipeline...`);
-  const summary = await processScrapedPosts(normalizedPosts);
+  onProgress?.({
+    stage: 'ingesting',
+    message: `Apify scraped ${normalizedPosts.length} posts. Analyzing with AI...`,
+    current: 0,
+    total: normalizedPosts.length,
+  });
+
+  const summary = await processScrapedPosts(normalizedPosts, { onProgress });
 
   return {
     scrapedCount: normalizedPosts.length,

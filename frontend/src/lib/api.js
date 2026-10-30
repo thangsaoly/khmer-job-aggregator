@@ -56,3 +56,40 @@ export async function fetchJobById(id) {
 
   return response.json();
 }
+
+/**
+ * Trigger a background TikTok scrape (dev mode).
+ *
+ * @param {object}  [options]
+ * @param {number}  [options.resultsPerPage=5]
+ * @param {boolean} [options.fast=true]
+ * @returns {Promise<{ success: boolean, message: string, data: object }>}
+ */
+export async function triggerScrape(options = { resultsPerPage: 5, fast: true }) {
+  const response = await fetch(`${BASE}/scrape/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok && response.status !== 409) {
+    throw new Error(data.error ?? `Scrape request failed with status ${response.status}`);
+  }
+
+  return data;
+}
+
+/**
+ * Check the status and progress of the background TikTok scraper.
+ *
+ * @returns {Promise<{ success: boolean, data: object }>}
+ */
+export async function fetchScrapeStatus() {
+  const response = await fetch(`${BASE}/scrape/status`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch scrape status (${response.status})`);
+  }
+  return response.json();
+}
+
