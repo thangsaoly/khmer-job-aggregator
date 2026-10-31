@@ -2,12 +2,12 @@ name: Scrape TikTok jobs
 
 on:
   schedule:
-    - cron: '0 */6 * * *' # every 6 hours (UTC)
+    - cron: '0 18 * * *' # once daily at 01:00 Cambodia time (UTC+7)
   workflow_dispatch:
     inputs:
       results_per_page:
         description: 'Max results per hashtag / search query'
-        default: '20'
+        default: '8'
 
 # Never run two scrapes at once — they would race on the same posts
 concurrency:

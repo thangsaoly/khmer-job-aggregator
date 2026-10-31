@@ -43,12 +43,13 @@ const FAST_SEARCH_QUERIES = [
  * Run a live scrape against TikTok using Apify, then ingest the results.
  *
  * @param {object}   options
- * @param {number}   [options.resultsPerPage=20] Max results per query/hashtag
+ * @param {number}   [options.resultsPerPage=8] Max results per query/hashtag (keep ≤10 to fit
+ *                                             Apify's free $5/month credit; see scripts/scrape.js)
  * @param {boolean}  [options.fast=false] Use high-yield top targets for quick execution
  * @param {Function} [options.onProgress] Real-time progress callback
  * @returns {Promise<{ scrapedCount: number, summary: object }>}
  */
-export async function scrapeAndIngestTikTok({ resultsPerPage = 20, fast = false, onProgress } = {}) {
+export async function scrapeAndIngestTikTok({ resultsPerPage = 8, fast = false, onProgress } = {}) {
   if (!process.env.APIFY_API_TOKEN) {
     throw new Error('APIFY_API_TOKEN is not set in environment.');
   }
@@ -56,7 +57,11 @@ export async function scrapeAndIngestTikTok({ resultsPerPage = 20, fast = false,
   const hashtags = fast ? FAST_HASHTAGS : ALL_HASHTAGS;
   const searchQueries = fast ? FAST_SEARCH_QUERIES : ALL_SEARCH_QUERIES;
 
-  console.log(`[Scraper] Starting live TikTok scrape on Apify (fast=${fast}, perPage=${resultsPerPage}, targets=${hashtags.length + searchQueries.length})...`);
+  // Budget guard on the Apify Free plan: interactive edge-triggered scrapes
+  // must not be able to burn the monthly $5 credit on one UI click.
+  const perPage = fast ? Math.min(resultsPerPage, 10) : resultsPerPage;
+
+  console.log(`[Scraper] Starting live TikTok scrape on Apify (fast=${fast}, perPage=${perPage}, targets=${hashtags.length + searchQueries.length})...`);
   onProgress?.({
     stage: 'scraping',
     message: fast ? 'Quick-crawling TikTok via Apify (top targets)...' : 'Scraping TikTok posts via Apify...',
@@ -69,7 +74,7 @@ export async function scrapeAndIngestTikTok({ resultsPerPage = 20, fast = false,
     {
       hashtags,
       searchQueries,
-      resultsPerPage,
+      resultsPerPage: perPage,
       shouldDownloadVideos: false,
       shouldDownloadCovers: false,
       shouldDownloadAvatars: false,
